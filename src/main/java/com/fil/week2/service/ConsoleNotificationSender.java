@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
-@Primary
+//@Primary
 @Service
 public class ConsoleNotificationSender implements NotificationSender {
     private static final Logger LOGGER = LoggerFactory.getLogger(ConsoleNotificationSender.class);
