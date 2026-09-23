@@ -1,11 +1,11 @@
 package com.fil.week2.service;
 
-import com.fil.week2.CustomerRepository;
+import com.fil.week2.repository.CustomerRepository;
 import com.fil.week2.model.Customer;
+import com.fil.week2.model.CustomerStatus;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 @Service
 public class OnboardingService {
@@ -21,6 +21,7 @@ public class OnboardingService {
         this.customerRepository = customerRepository;
     }
     public Customer onboard(Customer customer){
+        customer.setStatus(CustomerStatus.PENDING);
         System.out.println("customer:"+customer );
         Customer saved = this.customerRepository.save(customer);
         System.out.println("saved:"+saved);
@@ -29,7 +30,6 @@ public class OnboardingService {
             notificationSender.send(customer.getEmail(),
                     "Welcome "+customer.getName()+" to the system","Your account is ready to be used.");
         });
-
         return saved;
     }
 }

@@ -3,7 +3,7 @@ package com.fil.week2.model;
 import jakarta.persistence.*;
 
 import java.time.Instant;
-import java.util.Objects;
+import java.util.*;
 
 @Entity
 @Table(name = "customer",
@@ -29,6 +29,18 @@ public class Customer extends AuditableEntity{
     })
     private Address billingAddress;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name="status", nullable = false)
+    private CustomerStatus status;
+
+    @Version
+    private long version;
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "customer_tag", joinColumns = @JoinColumn(name = "customer_id"))
+    @Column(name = "tag", nullable = false, length = 40)
+    private Set<String> tags = new HashSet<>();
+
 
     protected Customer() {}
 
@@ -36,6 +48,30 @@ public class Customer extends AuditableEntity{
         this.id = id;
         this.name = name;
         this.email = email;
+    }
+
+    public long getVersion() {
+        return version;
+    }
+
+    public void setVersion(long version) {
+        this.version = version;
+    }
+
+    public Set<String> getTags() {
+        return tags;
+    }
+
+    public void setTags(Set<String> tags) {
+        this.tags = tags;
+    }
+
+    public CustomerStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(CustomerStatus status) {
+        this.status = status;
     }
 
     public Address getAddress() {
@@ -88,6 +124,8 @@ public class Customer extends AuditableEntity{
                 ", updatedAt=' "+getUpdatedAt()+ '\''+
                 ", address=' "+address+ '\''+
                 ", billingAddress=' "+billingAddress+ '\''+
+                ", status=" + status +
+                ", tags=" + tags +
                 '}';
     }
 
