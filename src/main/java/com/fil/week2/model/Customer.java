@@ -1,19 +1,34 @@
 package com.fil.week2.model;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
+import jakarta.persistence.*;
 
+import java.time.Instant;
 import java.util.Objects;
 
-@Entity(name = "customer")
-public class Customer {
+@Entity
+@Table(name = "customer",
+        uniqueConstraints = @UniqueConstraint(name = "org_unique_email", columnNames = "email"))
+public class Customer extends AuditableEntity{
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     private String name;
     private String email;
+
+    @Embedded
+    private Address address;
+
+    @Embedded
+    @AttributeOverrides({
+            @AttributeOverride(name = "city",
+                    column = @Column(name = "billing_city")),
+            @AttributeOverride(name = "zip",
+                    column = @Column(name = "billing_zip")),
+            @AttributeOverride(name = "street",
+                    column = @Column(name = "billing_street")),
+    })
+    private Address billingAddress;
+
 
     protected Customer() {}
 
@@ -21,6 +36,22 @@ public class Customer {
         this.id = id;
         this.name = name;
         this.email = email;
+    }
+
+    public Address getAddress() {
+        return address;
+    }
+
+    public Address getBillingAddress() {
+        return billingAddress;
+    }
+
+    public void setBillingAddress(Address billingAddress) {
+        this.billingAddress = billingAddress;
+    }
+
+    public void setAddress(Address address) {
+        this.address = address;
     }
 
     public Long getId() {
@@ -53,6 +84,10 @@ public class Customer {
                 "id=" + id +
                 ", name='" + name + '\'' +
                 ", email='" + email + '\'' +
+                ", createdAt=' "+getCreatedAt()+ '\''+
+                ", updatedAt=' "+getUpdatedAt()+ '\''+
+                ", address=' "+address+ '\''+
+                ", billingAddress=' "+billingAddress+ '\''+
                 '}';
     }
 
