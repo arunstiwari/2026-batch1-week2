@@ -41,6 +41,9 @@ public class Customer extends AuditableEntity{
     @Column(name = "tag", nullable = false, length = 40)
     private Set<String> tags = new HashSet<>();
 
+    @OneToMany(mappedBy = "customer", orphanRemoval = false,cascade = CascadeType.ALL)
+    private List<Account> accounts = new ArrayList<>();
+
 
     protected Customer() {}
 
@@ -48,6 +51,16 @@ public class Customer extends AuditableEntity{
         this.id = id;
         this.name = name;
         this.email = email;
+    }
+
+    public void addAccount(Account account) {
+        accounts.add(account);
+        account.setCustomer(this);
+    }
+
+    public void removeAccount(Account account) {
+        accounts.remove(account);
+        account.setCustomer(null);
     }
 
     public long getVersion() {

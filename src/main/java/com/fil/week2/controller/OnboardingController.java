@@ -2,6 +2,7 @@ package com.fil.week2.controller;
 
 import com.fil.week2.dto.CustomerResponse;
 import com.fil.week2.model.Customer;
+import com.fil.week2.model.CustomerRequest;
 import com.fil.week2.service.CustomerService;
 import com.fil.week2.service.OnboardingService;
 import jakarta.transaction.Transactional;
@@ -23,7 +24,8 @@ public class OnboardingController {
         this.customerService = customerService;
     }
     @PostMapping("/customers")
-    public Customer onboarding(@RequestBody Customer customer) {
+    public Customer onboarding(@RequestBody CustomerRequest customerRequest) {
+        Customer customer = CustomerRequest.from(customerRequest);
         return onboardingService.onboard(customer);
     }
 
