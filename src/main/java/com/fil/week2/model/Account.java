@@ -90,4 +90,15 @@ public class Account extends AuditableEntity {
                 ", customer=" + customer +
                 '}';
     }
+
+    public void deposit(BigDecimal amount) {
+        this.balance.add(amount);
+    }
+
+    public void withdraw(BigDecimal amount) {
+        if(this.balance.subtract(amount).compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Insufficient funds");
+        }
+        this.balance.subtract(amount);
+    }
 }

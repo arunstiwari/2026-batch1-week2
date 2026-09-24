@@ -1,7 +1,9 @@
 package com.fil.week2.service;
 
+import com.fil.week2.dto.AccountDepositResponse;
 import com.fil.week2.dto.AccountOpenRequest;
 import com.fil.week2.dto.AccountResponse;
+import com.fil.week2.dto.DepositRequest;
 import com.fil.week2.exception.CustomerNotFoundException;
 import com.fil.week2.model.Account;
 import com.fil.week2.model.Customer;
@@ -10,6 +12,7 @@ import com.fil.week2.repository.CustomerRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.Random;
 
 @Service
@@ -39,5 +42,42 @@ public class AccountService {
         customer.addAccount(account);
         customerRepository.flush();
         return AccountResponse.from(account);
+    }
+
+    @Transactional
+    public AccountDepositResponse depositAmount(Long customerId, DepositRequest depositRequest) {
+        Account acc = getAcc(customerId, depositRequest);
+        if (acc == null) {
+            //TODO We can throw an Exception AccountNotFoundException();
+        }
+        acc.deposit(depositRequest.amount());
+        customerRepository.flush();
+        return new AccountDepositResponse("Balance is Updated successfully", acc.getBalance());
+    }
+
+    private Account getAcc(Long customerId, DepositRequest depositRequest) {
+        Customer customer = customerRepository.findById(customerId)
+                .orElseThrow(() ->
+                        new CustomerNotFoundException("Customer with id " + customerId + " does not exist in the system"));
+
+        // Validating the accountNumber passed in DepositRequest
+        Account acc = accountRepository.findByAccountNumber(depositRequest.accountNumber());
+        return acc;
+    }
+
+    @Transactional
+    public AccountDepositResponse withdrawAmount(Long customerId, DepositRequest depositRequest) {
+//        Customer customer = customerRepository.findById(customerId)
+//                .orElseThrow(() ->
+//                        new CustomerNotFoundException("Customer with id " + customerId + " does not exist in the system"));
+//
+//        // Validating the accountNumber passed in DepositRequest
+        Account acc = getAcc(customerId, depositRequest);
+        if (acc == null) {
+            //TODO We can throw an Exception AccountNotFoundException();
+        }
+        acc.withdraw(depositRequest.amount());
+        customerRepository.flush();
+        return new AccountDepositResponse("Balance is Updated successfully", acc.getBalance());
     }
 }

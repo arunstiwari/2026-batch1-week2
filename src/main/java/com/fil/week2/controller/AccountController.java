@@ -1,7 +1,9 @@
 package com.fil.week2.controller;
 
+import com.fil.week2.dto.AccountDepositResponse;
 import com.fil.week2.dto.AccountOpenRequest;
 import com.fil.week2.dto.AccountResponse;
+import com.fil.week2.dto.DepositRequest;
 import com.fil.week2.service.AccountService;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,5 +25,12 @@ public class AccountController {
 
         AccountResponse accountResponse = acccountService.openAccount(customerId, accountOpenRequest);
         return accountResponse;
+    }
+
+    @PostMapping("/customers/{customerId}/deposit")
+    public AccountDepositResponse depositAmount(@PathVariable("customerId") Long customerId,
+                                                @RequestBody DepositRequest depositRequest){
+        AccountDepositResponse response = acccountService.depositAmount(customerId, depositRequest);
+        return response;
     }
 }
