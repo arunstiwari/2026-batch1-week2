@@ -50,8 +50,10 @@ public class AccountService {
         if (acc == null) {
             //TODO We can throw an Exception AccountNotFoundException();
         }
+        System.out.println("depositAmount " + depositRequest.toString());
         acc.deposit(depositRequest.amount());
         customerRepository.flush();
+        System.out.println("Account : " + acc);
         return new AccountDepositResponse("Balance is Updated successfully", acc.getBalance());
     }
 

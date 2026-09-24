@@ -27,7 +27,7 @@ public class AccountController {
         return accountResponse;
     }
 
-    @PostMapping("/customers/{customerId}/deposit")
+    @PostMapping("/customers/{customerId}/deposits")
     public AccountDepositResponse depositAmount(@PathVariable("customerId") Long customerId,
                                                 @RequestBody DepositRequest depositRequest){
         AccountDepositResponse response = acccountService.depositAmount(customerId, depositRequest);

@@ -92,13 +92,14 @@ public class Account extends AuditableEntity {
     }
 
     public void deposit(BigDecimal amount) {
-        this.balance.add(amount);
+        this.balance = this.balance.add(amount);
     }
 
     public void withdraw(BigDecimal amount) {
-        if(this.balance.subtract(amount).compareTo(BigDecimal.ZERO) <= 0) {
+        BigDecimal remaining = this.balance.subtract(amount);
+        if(remaining.compareTo(BigDecimal.ZERO) < 0) {
             throw new RuntimeException("Insufficient funds");
         }
-        this.balance.subtract(amount);
+        this.balance = remaining;
     }
 }
