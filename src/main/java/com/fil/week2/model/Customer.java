@@ -1,5 +1,7 @@
 package com.fil.week2.model;
 
+import com.fil.week2.exception.InvalidStateTransitionException;
+import com.fil.week2.exception.KycNotFoundException;
 import jakarta.persistence.*;
 
 import java.time.Instant;
@@ -43,6 +45,9 @@ public class Customer extends AuditableEntity{
 
     @OneToMany(mappedBy = "customer", orphanRemoval = false,cascade = CascadeType.ALL)
     private List<Account> accounts = new ArrayList<>();
+
+    @OneToOne(mappedBy = "customer", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private KycVerification kyc;
 
 
     protected Customer() {}
@@ -127,6 +132,10 @@ public class Customer extends AuditableEntity{
         this.email = email;
     }
 
+    public KycVerification getKyc() {
+        return kyc;
+    }
+
     @Override
     public String toString() {
         return "Customer{" +
@@ -152,5 +161,41 @@ public class Customer extends AuditableEntity{
     @Override
     public int hashCode() {
         return Objects.hash(id, name, email);
+    }
+
+    public KycVerification submitKyc(DocumentType documentType, String documentNumber) {
+        if (kyc == null) {
+            kyc = new KycVerification(this, documentType, documentNumber);
+        } else {
+            kyc.resubmit(documentType, documentNumber);
+        }
+        return kyc;
+
+    }
+
+    public KycVerification approveKyc(String reviewedBy) {
+        requireKyc().approve(reviewedBy);
+        activateCustomerStatus();
+        return kyc;
+    }
+
+    private void activateCustomerStatus() {
+        if (status != CustomerStatus.PENDING) {
+            throw new InvalidStateTransitionException(
+                    "Customer " + id + " cannot be activated from status " + status);
+        }
+        status = CustomerStatus.ACTIVE;
+    }
+
+    private KycVerification requireKyc() {
+        if (kyc == null) {
+            throw new KycNotFoundException(id);
+        }
+        return kyc;
+    }
+
+    public KycVerification rejectKyc(String reviewedBy, String reason) {
+        requireKyc().reject(reviewedBy, reason);
+        return kyc;
     }
 }
