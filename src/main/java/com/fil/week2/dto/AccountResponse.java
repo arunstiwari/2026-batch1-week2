@@ -2,23 +2,24 @@ package com.fil.week2.dto;
 
 import com.fil.week2.model.Account;
 import com.fil.week2.model.AccountType;
-import jakarta.persistence.Version;
+import com.fil.week2.model.Money;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 
-public record AccountResponse(Long id,
-                              String accountNumber,
+/**
+ * No surrogate key: the Account Number is the account's public identity, and
+ * publishing a sequential database id beside it muddles which one is canonical.
+ */
+public record AccountResponse(String accountNumber,
                               AccountType accountType,
-                              BigDecimal balance,
+                              Money balance,
                               long version,
                               Long customerId,
                               Instant createdAt,
                               Instant updatedAt) {
     public static AccountResponse from(Account account) {
         return new AccountResponse(
-                account.getId(),
-                account.getAccountNumber(),
+                account.getAccountNumber().value(),
                 account.getAccountType(),
                 account.getBalance(),
                 account.getVersion(),

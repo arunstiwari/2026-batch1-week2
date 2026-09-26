@@ -5,23 +5,29 @@ import jakarta.persistence.*;
 
 import java.time.Instant;
 
+/**
+ * One submission of identity evidence and the decision made on it. A Customer
+ * accumulates these; once decided, a verification is never edited again, so the
+ * record of who refused someone and why survives their next attempt.
+ */
 @Entity
 @Table(name = "kyc_verification")
-public class KycVerification extends AuditableEntity{
+public class KycVerification extends AuditableEntity {
     @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @OneToOne(fetch = FetchType.LAZY, optional = false)
-    @MapsId
-    @JoinColumn(name = "customer_id")
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "customer_id", nullable = false)
     private Customer customer;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "document_type", nullable = false, length = 30)
     private DocumentType documentType;
 
+    @Convert(converter = DocumentNumberConverter.class)
     @Column(name = "document_number", nullable = false, length = 40)
-    private String documentNumber;
+    private DocumentNumber documentNumber;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
@@ -41,7 +47,7 @@ public class KycVerification extends AuditableEntity{
 
     protected KycVerification() {}
 
-    public KycVerification(Customer customer, DocumentType documentType, String documentNumber){
+    KycVerification(Customer customer, DocumentType documentType, DocumentNumber documentNumber) {
         this.customer = customer;
         this.documentType = requireDocumentType(documentType);
         this.documentNumber = documentNumber;
@@ -53,10 +59,6 @@ public class KycVerification extends AuditableEntity{
             throw new IllegalArgumentException("Document type is required");
         }
         return documentType;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
     }
 
     public Long getId() {
@@ -71,7 +73,7 @@ public class KycVerification extends AuditableEntity{
         return documentType;
     }
 
-    public String getDocumentNumber() {
+    public DocumentNumber getDocumentNumber() {
         return documentNumber;
     }
 
@@ -95,55 +97,35 @@ public class KycVerification extends AuditableEntity{
         return version;
     }
 
-    @Override
-    public String toString() {
-        return "KycVerification{" +
-                "id=" + id +
-                ", customer=" + customer +
-                ", documentType=" + documentType +
-                ", documentNumber='" + documentNumber + '\'' +
-                ", status=" + status +
-                ", reviewedBy='" + reviewedBy + '\'' +
-                ", reviewedAt=" + reviewedAt +
-                ", rejectionReason='" + rejectionReason + '\'' +
-                ", version=" + version +
-                '}';
+    /** A verification awaiting a decision. A Customer has at most one at a time. */
+    public boolean isOpen() {
+        return status == KycStatus.SUBMITTED;
     }
 
-    public void resubmit(DocumentType documentType, String documentNumber) {
-        if (status != KycStatus.REJECTED) {
-            throw new InvalidStateTransitionException(
-                    "KYC for customer " + id + " is already " + status + " and cannot be submitted again");
-        }
-        this.documentType = requireDocumentType(documentType);
-        this.documentNumber = documentNumber;
-        this.status = KycStatus.SUBMITTED;
-        this.reviewedBy = null;
-        this.reviewedAt = null;
-        this.rejectionReason = null;
+    public boolean isApproved() {
+        return status == KycStatus.APPROVED;
     }
 
-    public void approve(String reviewedBy) {
-        checkEligibilityForSubmission("approved");
-        this.status = KycStatus.APPROVED;
+    void approve(String reviewedBy) {
+        requireOpen("approved");
         this.reviewedBy = requireReviewer(reviewedBy);
         this.reviewedAt = Instant.now();
-        this.rejectionReason = null;
+        this.status = KycStatus.APPROVED;
     }
 
-    public void reject(String reviewedBy, String reason) {
-        checkEligibilityForSubmission("rejected");
+    void reject(String reviewedBy, String reason) {
+        requireOpen("rejected");
         if (reason == null || reason.isBlank()) {
             throw new IllegalArgumentException("A rejection reason is required");
         }
-        this.status = KycStatus.REJECTED;
         this.reviewedBy = requireReviewer(reviewedBy);
         this.reviewedAt = Instant.now();
         this.rejectionReason = reason.strip();
+        this.status = KycStatus.REJECTED;
     }
 
-    private void checkEligibilityForSubmission(String verb) {
-        if (status != KycStatus.SUBMITTED) {
+    private void requireOpen(String verb) {
+        if (!isOpen()) {
             throw new InvalidStateTransitionException(
                     "Only a SUBMITTED verification can be " + verb + ", this one is " + status);
         }
@@ -156,5 +138,15 @@ public class KycVerification extends AuditableEntity{
         return reviewedBy.strip();
     }
 
-
+    @Override
+    public String toString() {
+        return "KycVerification{" +
+                "id=" + id +
+                ", documentType=" + documentType +
+                ", status=" + status +
+                ", reviewedBy='" + reviewedBy + '\'' +
+                ", reviewedAt=" + reviewedAt +
+                ", rejectionReason='" + rejectionReason + '\'' +
+                '}';
+    }
 }

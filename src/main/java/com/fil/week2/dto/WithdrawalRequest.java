@@ -6,6 +6,6 @@ import jakarta.validation.constraints.Positive;
 
 import java.math.BigDecimal;
 
-public record DepositRequest(@NotBlank String accountNumber,
-                             @NotNull @Positive BigDecimal amount) {
+public record WithdrawalRequest(@NotBlank String accountNumber,
+                                @NotNull @Positive BigDecimal amount) {
 }

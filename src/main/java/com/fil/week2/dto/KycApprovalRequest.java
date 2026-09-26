@@ -1,4 +1,6 @@
 package com.fil.week2.dto;
 
-public record KycApprovalRequest(String reviewedBy) {
+import jakarta.validation.constraints.NotBlank;
+
+public record KycApprovalRequest(@NotBlank String reviewedBy) {
 }

@@ -2,10 +2,12 @@ package com.fil.week2.controller;
 
 import com.fil.week2.dto.*;
 import com.fil.week2.service.KycService;
+import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.net.URI;
+import java.util.List;
 
 @RestController
 public class KycController {
@@ -17,7 +19,7 @@ public class KycController {
 
     @PostMapping("/customers/{customerId}/kyc")
     public ResponseEntity<KycSubmissionResponse> submit(@PathVariable("customerId") Long customerId,
-                                                        @RequestBody KycSubmissionRequest request){
+                                                        @Valid @RequestBody KycSubmissionRequest request){
 
         KycSubmissionResponse response = kycService.submit(customerId, request);
         return ResponseEntity
@@ -30,16 +32,21 @@ public class KycController {
         return kycService.findByCustomer(customerId);
     }
 
-     // A decision is an event, so it POSTs to its own sub-resource - like a deposit
+    @GetMapping("/customers/{customerId}/kyc/history")
+    public List<KycResponse> findHistory(@PathVariable Long customerId) {
+        return kycService.findHistory(customerId);
+    }
+
+    // A decision is an event, so it POSTs to its own sub-resource - like a deposit
     @PostMapping("/customers/{customerId}/kyc/approval")
     public KycResponse approve(@PathVariable Long customerId,
-                               @RequestBody KycApprovalRequest request) {
+                               @Valid @RequestBody KycApprovalRequest request) {
         return kycService.approve(customerId, request);
     }
 
     @PostMapping("/customers/{customerId}/kyc/rejection")
     public KycResponse reject(@PathVariable Long customerId,
-                              @RequestBody KycRejectionRequest request) {
+                              @Valid @RequestBody KycRejectionRequest request) {
         return kycService.reject(customerId, request);
     }
 }
