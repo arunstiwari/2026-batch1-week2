@@ -1,14 +1,14 @@
 package com.fil.week2.exception;
 
 public class CustomerNotFoundException extends RuntimeException {
-    private final String message;
+    private final Long customerId;
 
-    public CustomerNotFoundException(String message) {
-        this.message = message;
+    public CustomerNotFoundException(Long customerId) {
+        super("Customer " + customerId + " does not exist in the system");
+        this.customerId = customerId;
     }
 
-    @Override
-    public String getMessage() {
-        return message;
+    public Long getCustomerId() {
+        return customerId;
     }
 }

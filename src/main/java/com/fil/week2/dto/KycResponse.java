@@ -20,9 +20,9 @@ public record KycResponse(
 ) {
     public static KycResponse from(KycVerification kyc) {
         return new KycResponse(
-                kyc.getCustomer() == null ? kyc.getId() : kyc.getCustomer().getId(),
+                kyc.getCustomer().getId(),
                 kyc.getDocumentType(),
-                mask(kyc.getDocumentNumber()),
+                kyc.getDocumentNumber().masked(),
                 kyc.getStatus(),
                 kyc.getReviewedBy(),
                 kyc.getReviewedAt(),
@@ -32,12 +32,4 @@ public record KycResponse(
                 kyc.getUpdatedAt());
     }
 
-    /** The document number is stored in full but never echoed in full: last four digits only. */
-    private static String mask(String documentNumber) {
-        if (documentNumber == null || documentNumber.length() <= 4) {
-            return "****";
-        }
-        return "*".repeat(documentNumber.length() - 4)
-                + documentNumber.substring(documentNumber.length() - 4);
-    }
 }

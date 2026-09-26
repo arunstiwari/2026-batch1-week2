@@ -1,6 +1,6 @@
 package com.fil.week2.dto;
 
-import java.math.BigDecimal;
+import com.fil.week2.model.Money;
 
-public record AccountDepositResponse(String message, BigDecimal balance) {
+public record AccountDepositResponse(String message, Money balance) {
 }

@@ -3,83 +3,72 @@ package com.fil.week2.service;
 import com.fil.week2.dto.AccountDepositResponse;
 import com.fil.week2.dto.AccountOpenRequest;
 import com.fil.week2.dto.AccountResponse;
+import com.fil.week2.dto.AccountSummary;
 import com.fil.week2.dto.DepositRequest;
+import com.fil.week2.dto.WithdrawalRequest;
 import com.fil.week2.exception.CustomerNotFoundException;
 import com.fil.week2.model.Account;
+import com.fil.week2.model.AccountNumber;
 import com.fil.week2.model.Customer;
-import com.fil.week2.repository.AccountRepository;
+import com.fil.week2.model.Money;
+import com.fil.week2.repository.AccountQueries;
 import com.fil.week2.repository.CustomerRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
-import java.util.Random;
+import java.util.List;
 
+/**
+ * Orchestration only. Every rule about accounts lives on the Customer root, which
+ * is what stops a caller from forgetting one.
+ */
 @Service
 public class AccountService {
-    private CustomerRepository customerRepository;
-    private AccountRepository accountRepository;
+    private final CustomerRepository customerRepository;
+    private final AccountQueries accountQueries;
+    private final AccountNumberGenerator accountNumberGenerator;
 
-    public AccountService(CustomerRepository customerRepository, AccountRepository accountRepository) {
+    public AccountService(CustomerRepository customerRepository,
+                          AccountQueries accountQueries,
+                          AccountNumberGenerator accountNumberGenerator) {
         this.customerRepository = customerRepository;
-        this.accountRepository = accountRepository;
+        this.accountQueries = accountQueries;
+        this.accountNumberGenerator = accountNumberGenerator;
     }
 
     @Transactional
     public AccountResponse openAccount(Long customerId, AccountOpenRequest accountOpenRequest) {
-        Customer customer = customerRepository.findById(customerId)
-                .orElseThrow(() ->
-                        new CustomerNotFoundException("Customer with id " + customerId + " does not exist in the system"));
-
-        // Generate account number
-        String accNumber = "AC%012d".formatted(Math.abs(new Random().nextLong() % 1000000000));
-        // validate accNumber is already there in Account table.
-        Account acc = accountRepository.findByAccountNumber(accNumber);
-        if (acc != null) {
-            //TODO we need to retry generating a new number
-        }
-        Account account = new Account(accNumber, accountOpenRequest.type(), accountOpenRequest.balance());
-        customer.addAccount(account);
+        Customer customer = requireCustomer(customerId);
+        Account account = customer.openAccount(accountOpenRequest.type(), accountNumberGenerator.generate());
         customerRepository.flush();
         return AccountResponse.from(account);
     }
 
     @Transactional
     public AccountDepositResponse depositAmount(Long customerId, DepositRequest depositRequest) {
-        Account acc = getAcc(customerId, depositRequest);
-        if (acc == null) {
-            //TODO We can throw an Exception AccountNotFoundException();
-        }
-        System.out.println("depositAmount " + depositRequest.toString());
-        acc.deposit(depositRequest.amount());
+        Account account = requireCustomer(customerId).depositTo(
+                AccountNumber.of(depositRequest.accountNumber()), Money.of(depositRequest.amount()));
         customerRepository.flush();
-        System.out.println("Account : " + acc);
-        return new AccountDepositResponse("Balance is Updated successfully", acc.getBalance());
-    }
-
-    private Account getAcc(Long customerId, DepositRequest depositRequest) {
-        Customer customer = customerRepository.findById(customerId)
-                .orElseThrow(() ->
-                        new CustomerNotFoundException("Customer with id " + customerId + " does not exist in the system"));
-
-        // Validating the accountNumber passed in DepositRequest
-        Account acc = accountRepository.findByAccountNumber(depositRequest.accountNumber());
-        return acc;
+        return new AccountDepositResponse("Deposit accepted", account.getBalance());
     }
 
     @Transactional
-    public AccountDepositResponse withdrawAmount(Long customerId, DepositRequest depositRequest) {
-//        Customer customer = customerRepository.findById(customerId)
-//                .orElseThrow(() ->
-//                        new CustomerNotFoundException("Customer with id " + customerId + " does not exist in the system"));
-//
-//        // Validating the accountNumber passed in DepositRequest
-        Account acc = getAcc(customerId, depositRequest);
-        if (acc == null) {
-            //TODO We can throw an Exception AccountNotFoundException();
-        }
-        acc.withdraw(depositRequest.amount());
+    public AccountDepositResponse withdrawAmount(Long customerId, WithdrawalRequest withdrawalRequest) {
+        Account account = requireCustomer(customerId).withdrawFrom(
+                AccountNumber.of(withdrawalRequest.accountNumber()), Money.of(withdrawalRequest.amount()));
         customerRepository.flush();
-        return new AccountDepositResponse("Balance is Updated successfully", acc.getBalance());
+        return new AccountDepositResponse("Withdrawal accepted", account.getBalance());
+    }
+
+    /** Reads go around the root, but only ever as projections. */
+    @Transactional(readOnly = true)
+    public List<AccountSummary> findAccounts(Long customerId) {
+        requireCustomer(customerId);
+        return accountQueries.findSummaries(customerId);
+    }
+
+    private Customer requireCustomer(Long customerId) {
+        return customerRepository.findById(customerId)
+                .orElseThrow(() -> new CustomerNotFoundException(customerId));
     }
 }
