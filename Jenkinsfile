@@ -18,6 +18,16 @@ def mvn(String args) {
     }
 }
 
+// Same as mvn() but hands back the exit code rather than failing the stage, so the
+// caller can tell an infrastructure error apart from a genuine finding. Maven output
+// still streams to the console.
+def mvnStatus(String args) {
+    if (isUnix()) {
+        return sh(script: "./mvnw ${args}", returnStatus: true)
+    }
+    return bat(script: "mvnw.cmd ${args}", returnStatus: true)
+}
+
 pipeline {
     agent any
 
@@ -57,6 +67,12 @@ pipeline {
             name: 'DEPENDENCY_CHECK_FAIL_ON_CVSS',
             defaultValue: '7.0',
             description: 'Fail the build when a dependency has a CVSS score at or above this value. Use 11 to report only.'
+        )
+        booleanParam(
+            name: 'PUBLISH_DEPENDENCY_CHECK_TRENDS',
+            defaultValue: false,
+            description: 'Publish Dependency-Check trend graphs. Requires the OWASP ' +
+                         'Dependency-Check Jenkins plugin; reports are archived either way.'
         )
         booleanParam(
             name: 'RUN_IMAGE_SCAN',
@@ -303,12 +319,13 @@ pipeline {
                         }
                     }
 
+                    def rc
                     if (hasNvdKey) {
                         // Passed by environment variable name, not -D, so the key cannot
                         // leak via the process table or the build log.
                         withCredentials([string(credentialsId: env.NVD_CREDENTIALS_ID,
                                                 variable: 'NVD_API_KEY')]) {
-                            mvn "${baseArgs} -DnvdApiKeyEnvironmentVariable=NVD_API_KEY"
+                            rc = mvnStatus("${baseArgs} -DnvdApiKeyEnvironmentVariable=NVD_API_KEY")
                         }
                     } else {
                         def wantedId = env.NVD_CREDENTIALS_ID ?: 'nvd-api-key'
@@ -324,7 +341,31 @@ pipeline {
 
                         // A longer inter-request delay is what keeps the unauthenticated NVD
                         // API from returning 403/429 partway through the download.
-                        mvn "${baseArgs} -DnvdApiDelay=8000"
+                        rc = mvnStatus("${baseArgs} -DnvdApiDelay=8000")
+                    }
+
+                    // Dependency-Check exits non-zero both when it finds something and when
+                    // it could not run at all. The report is the discriminator: the plugin
+                    // only writes one once analysis actually completed.
+                    def reportWritten = fileExists('target/dependency-check-report.xml')
+                    env.DC_REPORT_WRITTEN = reportWritten ? 'true' : 'false'
+
+                    if (rc == 0) {
+                        echo "Dependency-Check passed: nothing at or above CVSS " +
+                             "${params.DEPENDENCY_CHECK_FAIL_ON_CVSS}."
+                    } else if (reportWritten) {
+                        error "Dependency-Check found dependencies at or above CVSS " +
+                              "${params.DEPENDENCY_CHECK_FAIL_ON_CVSS}. " +
+                              "See the archived dependency-check-report.html."
+                    } else {
+                        // No report means the scan never completed, which is an
+                        // infrastructure problem and not a statement about this codebase.
+                        // Flag it loudly but do not gate the build on it.
+                        unstable "Dependency-Check did not complete (Maven exit ${rc}) and wrote " +
+                                 "no report, so no vulnerability verdict was reached. Usual " +
+                                 "causes: unauthenticated NVD download rate limited or timed " +
+                                 "out, or ${env.DEPENDENCY_CHECK_DATA_DIR} not writable by the " +
+                                 "Jenkins user. See the Maven output above for the decisive error."
                     }
                 }
             }
@@ -335,24 +376,35 @@ pipeline {
                         allowEmptyArchive: true,
                         onlyIfSuccessful: false
                     )
-                    // Trend graphs via the OWASP Dependency-Check plugin, if installed.
-                    catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-                        dependencyCheckPublisher(
-                            pattern: 'target/dependency-check-report.xml',
-                            failedTotalCritical: 0,
-                            unstableTotalHigh: 0
-                        )
+                    // Optional trend graphs. Off by default because the step only exists
+                    // when the OWASP Dependency-Check Jenkins plugin is installed, and an
+                    // unknown DSL step raises NoSuchMethodError - an Error, not an
+                    // Exception, so `catch (e)` will not hold it and catchError dumps a
+                    // ~60-line CPS trace that buries the real failure. The reports are
+                    // archived above regardless, so nothing is lost by leaving this off.
+                    script {
+                        if (!params.PUBLISH_DEPENDENCY_CHECK_TRENDS) {
+                            echo 'Dependency-Check trend publishing disabled.'
+                        } else if (!fileExists('target/dependency-check-report.xml')) {
+                            echo 'No dependency-check report to publish.'
+                        } else {
+                            try {
+                                dependencyCheckPublisher(
+                                    pattern: 'target/dependency-check-report.xml',
+                                    failedTotalCritical: 0,
+                                    unstableTotalHigh: 0
+                                )
+                            } catch (Throwable t) {
+                                echo "Skipped Dependency-Check trend publishing: ${t.message}"
+                            }
+                        }
                     }
                 }
                 failure {
-                    // The previous wording asserted a cause this stage never checked.
-                    // Findings and infrastructure errors both land here.
-                    echo "Dependency-Check stage failed. Two distinct causes look alike here:\n" +
-                         "  1. Findings at or above CVSS ${params.DEPENDENCY_CHECK_FAIL_ON_CVSS} - " +
-                         "the archived dependency-check-report.html lists them.\n" +
-                         "  2. The scan never ran (no NVD data, rate-limited download, or " +
-                         "${env.DEPENDENCY_CHECK_DATA_DIR} not writable) - no report is archived.\n" +
-                         "Check whether a report was archived before treating this as a security finding."
+                    echo "Dependency-Check gate failed on real findings " +
+                         "(report written: ${env.DC_REPORT_WRITTEN}). " +
+                         "Open the archived dependency-check-report.html, or re-run with a " +
+                         "higher DEPENDENCY_CHECK_FAIL_ON_CVSS (11 reports without gating)."
                 }
             }
         }
