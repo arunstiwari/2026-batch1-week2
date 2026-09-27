@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+
+    <!--
+      spring-boot-devtools is the Maven library. Dependency-Check's CPE Analyzer also
+      maps it onto two VMware *IDE tooling* products that merely share the name:
+
+        cpe:/a:vmware:spring_tools       - Spring Tools 4 for Eclipse
+        cpe:/a:vmware:spring_boot_tools  - the "Spring Boot Tools" VSCode extension
+
+      Those are editors, not this library, so every CVE filed against them is a false
+      positive here. The mismatch bites because the version ranges overlap by
+      coincidence: devtools 4.1.1 falls under "Spring Tools for Eclipse < 4.16.1".
+
+      Confirmed against the NVD record for CVE-2022-31691 (CVSS 9.8), which describes
+      SnakeYAML-based RCE in Spring Tools 4 for Eclipse and VSCode extensions, and
+      lists only IDE/editor CPEs as affected:
+        https://nvd.nist.gov/vuln/detail/CVE-2022-31691
+
+      Independently, spring-boot-devtools is declared <optional>true</optional> and is
+      stripped from the repackaged jar by spring-boot-maven-plugin, so it is absent
+      from the container image and cannot reach production at all.
+
+      Deliberately NOT suppressed: cpe:/a:vmware:spring_boot. That mapping is
+      legitimate for a Spring Boot artifact, so genuine Spring Boot CVEs still gate
+      the build through it.
+    -->
+    <suppress>
+        <notes><![CDATA[
+            spring-boot-devtools is not the Spring Tools IDE or the Spring Boot Tools
+            VSCode extension. Suppresses the IDE-tooling CPEs only, not vmware:spring_boot.
+        ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.springframework\.boot/spring-boot-devtools@.*$</packageUrl>
+        <cpe>cpe:/a:vmware:spring_tools</cpe>
+        <cpe>cpe:/a:vmware:spring_boot_tools</cpe>
+    </suppress>
+
+</suppressions>

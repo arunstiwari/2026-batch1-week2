@@ -108,6 +108,7 @@ pipeline {
         DEPENDENCY_CHECK_DATA_DIR = '/var/lib/jenkins/caches/dependency-check'
         // Optional. Missing or blank means the scan runs unauthenticated (slow).
         NVD_CREDENTIALS_ID        = 'nvd-api-key'
+        DC_SUPPRESSION_FILE       = 'dependency-check-suppressions.xml'
 
         IMAGE_NAME = 'week2'
         // Set to e.g. 'registry.fil.lab/platform' to namespace the image for a future push.
@@ -302,7 +303,13 @@ pipeline {
                         "-DfailBuildOnCVSS=${params.DEPENDENCY_CHECK_FAIL_ON_CVSS} " +
                         "-Dformats=HTML,XML,JSON " +
                         "-DskipProvidedScope=true " +
-                        "-DskipTestScope=true"
+                        "-DskipTestScope=true " +
+                        // Documented, narrowly-scoped false positives. Each entry in the
+                        // file records why it is not a real finding. Stale rules that stop
+                        // matching are reported by the Unused Suppression Rule analyzer in
+                        // the Maven output (failBuildOnUnusedSuppressionRule defaults to
+                        // false, so they warn rather than break the build).
+                        "-DsuppressionFiles=${env.DC_SUPPRESSION_FILE}"
 
                     // The NVD API key is optional. Probe for the credential instead of
                     // letting withCredentials abort the build when it is not configured:
