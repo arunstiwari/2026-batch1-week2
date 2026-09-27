@@ -103,9 +103,12 @@ pipeline {
         SONAR_PROJECT_KEY   = 'week2'
         SONAR_PROJECT_NAME  = 'week2'
 
-        // Dependency-Check keeps a local mirror of the NVD. It lives outside the
-        // workspace so `cleanWs` does not force a multi-hour re-download every build.
-        DEPENDENCY_CHECK_DATA_DIR = '/var/lib/jenkins/caches/dependency-check'
+        // Dependency-Check keeps a ~240MB local mirror of the NVD. It must live outside
+        // the workspace so `cleanWs` cannot delete it, AND on a path that is actually
+        // persisted. /var/lib/jenkins does not exist in the Jenkins container image, so
+        // it lands on the container's overlay layer and vanishes whenever the container
+        // is recreated; JENKINS_HOME is the bind-mounted volume that survives.
+        DEPENDENCY_CHECK_DATA_DIR = '/var/jenkins_home/caches/dependency-check'
         // Optional. Missing or blank means the scan runs unauthenticated (slow).
         NVD_CREDENTIALS_ID        = 'nvd-api-key'
         DC_SUPPRESSION_FILE       = 'dependency-check-suppressions.xml'
@@ -446,15 +449,30 @@ pipeline {
                 script {
                     // Trivy runs as a container against the agent's Docker socket. The
                     // named volume caches the vulnerability database between builds.
+                    //
+                    // Reports come back on stdout and are written to the workspace by
+                    // Jenkins, NOT via `-v $WORKSPACE/target:/out`. Bind-mount paths are
+                    // resolved by the Docker daemon, so when Jenkins itself runs in a
+                    // container the workspace path does not exist on the host: the daemon
+                    // silently creates an empty directory, Trivy writes into it, and the
+                    // files never appear in the workspace. Trivy logs to stderr, so
+                    // stdout is the report alone.
                     def trivy = "docker run --rm " +
                                 "-v /var/run/docker.sock:/var/run/docker.sock " +
                                 "-v trivy-cache:/root/.cache/ " +
-                                "-v \"\$WORKSPACE/target\":/out " +
                                 "${env.TRIVY_IMAGE} image --scanners vuln --no-progress"
 
                     // Pass 1: full report of everything found, never breaks the build.
-                    sh "${trivy} --format json -o /out/trivy-report.json --exit-code 0 ${env.IMAGE_REF}"
-                    sh "${trivy} --format table -o /out/trivy-report.txt --exit-code 0 ${env.IMAGE_REF}"
+                    writeFile file: 'target/trivy-report.json', text: sh(
+                        script: "${trivy} --format json --exit-code 0 ${env.IMAGE_REF}",
+                        returnStdout: true
+                    )
+                    def table = sh(
+                        script: "${trivy} --format table --exit-code 0 ${env.IMAGE_REF}",
+                        returnStdout: true
+                    )
+                    writeFile file: 'target/trivy-report.txt', text: table
+                    echo table
 
                     // Pass 2: the gate. Only fixable findings at the configured severities
                     // break the build, so unpatched upstream CVEs cannot wedge the pipeline.
@@ -479,15 +497,21 @@ pipeline {
         stage('Container Smoke Test') {
             steps {
                 // Prove the image actually boots and serves traffic before it is promoted.
+                //
+                // Every probe here is made by the Docker daemon or from inside the
+                // container, never from the Jenkins process. `docker run -P` publishes on
+                // the *host*, so when Jenkins runs in a container `localhost:<port>` from
+                // the pipeline reaches nothing - that is why the earlier curl returned 000
+                // even though the application had started. The runtime image is Alpine
+                // based, so busybox wget is available for an in-container probe.
                 sh """
                     set -e
                     CONTAINER=week2-smoke-${env.BUILD_NUMBER}
-                    docker rm -f \$CONTAINER >/dev/null 2>&1 || true
-                    docker run -d --name \$CONTAINER -P ${env.IMAGE_REF} >/dev/null
-                    trap 'docker logs \$CONTAINER > target/container-smoke.log 2>&1 || true; docker rm -f \$CONTAINER >/dev/null 2>&1 || true' EXIT
+                    PROBE_PATH=/customers
 
-                    PORT=\$(docker port \$CONTAINER 8080/tcp | head -n 1 | sed 's/.*://')
-                    echo "Container listening on host port \$PORT"
+                    docker rm -f \$CONTAINER >/dev/null 2>&1 || true
+                    docker run -d --name \$CONTAINER ${env.IMAGE_REF} >/dev/null
+                    trap 'docker logs \$CONTAINER > target/container-smoke.log 2>&1 || true; docker rm -f \$CONTAINER >/dev/null 2>&1 || true' EXIT
 
                     for i in \$(seq 1 30); do
                         if docker logs \$CONTAINER 2>&1 | grep -q 'Started Week2Application'; then
@@ -508,12 +532,20 @@ pipeline {
                     done
 
                     # This project has no actuator dependency, so probe a real endpoint.
-                    STATUS=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 http://localhost:\$PORT/customers)
-                    echo "GET /customers -> \$STATUS"
-                    if [ "\$STATUS" != "200" ]; then
+                    # busybox wget exits non-zero on any non-2xx response.
+                    set +e
+                    PROBE=\$(docker exec \$CONTAINER wget -q -S -O /dev/null "http://localhost:8080\$PROBE_PATH" 2>&1)
+                    RC=\$?
+                    set -e
+                    echo "GET \$PROBE_PATH -> \$(echo "\$PROBE" | grep -m1 'HTTP/' | sed 's/^[[:space:]]*//')"
+                    if [ \$RC -ne 0 ]; then
+                        echo "Probe failed (wget exit \$RC). Response:"
+                        echo "\$PROBE"
+                        echo '--- container logs ---'
                         docker logs \$CONTAINER
                         exit 1
                     fi
+                    echo 'Container smoke test passed.'
                 """
             }
             post {
