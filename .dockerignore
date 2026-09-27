@@ -1,0 +1,16 @@
+# Only the packaged jar is needed as build context.
+.git
+.gitignore
+.gitattributes
+.idea
+.mvn
+.m2
+mvnw
+mvnw.cmd
+src
+HELP.md
+abc.html
+Jenkinsfile
+target/*
+!target/*.jar
+target/*-sources.jar

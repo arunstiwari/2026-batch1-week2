@@ -1,0 +1,449 @@
+// CI pipeline for week2 (Spring Boot 4.1.1 / Java 21 / Maven wrapper)
+//
+// Build -> Test -> Coverage -> Package -> SonarQube quality gate
+//   -> OWASP Dependency-Check -> Docker image -> Trivy image scan -> container smoke test
+//
+// Required Jenkins credentials (Manage Jenkins > Credentials):
+//   sonarqube-token   Secret text  - SonarQube user token with "Execute Analysis" on the project
+//   nvd-api-key       Secret text  - NVD API key for Dependency-Check (https://nvd.nist.gov/developers/request-an-api-key)
+//
+// Agent requirements: JDK 21, a Docker daemon the agent can talk to, git.
+// If the controller has a JDK tool configured, uncomment the `tools` block.
+
+def mvn(String args) {
+    if (isUnix()) {
+        sh "./mvnw ${args}"
+    } else {
+        bat "mvnw.cmd ${args}"
+    }
+}
+
+pipeline {
+    agent any
+
+    // tools {
+    //     jdk 'jdk-21'
+    // }
+
+    options {
+        timestamps()
+        timeout(time: 90, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '5'))
+    }
+
+    parameters {
+        booleanParam(
+            name: 'SKIP_TESTS',
+            defaultValue: false,
+            description: 'Package without running the test suite (not recommended).'
+        )
+        booleanParam(
+            name: 'RUN_COVERAGE',
+            defaultValue: true,
+            description: 'Generate a JaCoCo coverage report and feed it to SonarQube.'
+        )
+        booleanParam(
+            name: 'RUN_SONAR',
+            defaultValue: true,
+            description: 'Analyse the project in SonarQube and break the build if the quality gate fails.'
+        )
+        booleanParam(
+            name: 'RUN_DEPENDENCY_CHECK',
+            defaultValue: true,
+            description: 'Run OWASP Dependency-Check against the declared dependencies.'
+        )
+        string(
+            name: 'DEPENDENCY_CHECK_FAIL_ON_CVSS',
+            defaultValue: '7.0',
+            description: 'Fail the build when a dependency has a CVSS score at or above this value. Use 11 to report only.'
+        )
+        booleanParam(
+            name: 'RUN_IMAGE_SCAN',
+            defaultValue: true,
+            description: 'Scan the built container image with Trivy.'
+        )
+        string(
+            name: 'IMAGE_SCAN_SEVERITIES',
+            defaultValue: 'HIGH,CRITICAL',
+            description: 'Trivy severities that break the build.'
+        )
+    }
+
+    environment {
+        // Quiet, reproducible Maven output plus a per-workspace local repository so
+        // parallel jobs on one agent cannot corrupt each other's downloads.
+        MVN_FLAGS = '--batch-mode --no-transfer-progress -Dmaven.repo.local=.m2/repository'
+        MAVEN_OPTS = '-Xmx1g'
+
+        // Pinned tool versions. JaCoCo, Sonar and Dependency-Check are not declared in
+        // the pom, so their plugins are invoked directly by coordinate.
+        JACOCO_VERSION           = '0.8.13'
+        SONAR_PLUGIN_VERSION     = '5.8.0.7211'
+        DEPENDENCY_CHECK_VERSION = '12.2.2'
+        TRIVY_IMAGE              = 'aquasec/trivy:0.74.0'
+
+        SONAR_HOST_URL      = 'http://sonar.fil.lab:9000'
+        SONAR_PROJECT_KEY   = 'week2'
+        SONAR_PROJECT_NAME  = 'week2'
+
+        // Dependency-Check keeps a local mirror of the NVD. It lives outside the
+        // workspace so `cleanWs` does not force a multi-hour re-download every build.
+        DEPENDENCY_CHECK_DATA_DIR = '/var/lib/jenkins/caches/dependency-check'
+
+        IMAGE_NAME = 'week2'
+        // Set to e.g. 'registry.fil.lab/platform' to namespace the image for a future push.
+        IMAGE_REGISTRY = ''
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    if (isUnix()) {
+                        sh 'chmod +x mvnw'
+                    }
+                    env.GIT_SHORT_SHA = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+                    // Read the version straight from Maven so the pipeline does not
+                    // depend on the Pipeline Utility Steps plugin for readMavenPom().
+                    env.APP_VERSION = sh(
+                        script: "./mvnw -q ${env.MVN_FLAGS} help:evaluate " +
+                                "-Dexpression=project.version -DforceStdout",
+                        returnStdout: true
+                    ).trim().readLines().last().trim()
+                    env.IMAGE_TAG = "${env.APP_VERSION}-${env.BUILD_NUMBER}-${env.GIT_SHORT_SHA}"
+                    env.IMAGE_REF = env.IMAGE_REGISTRY
+                        ? "${env.IMAGE_REGISTRY}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+                        : "${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+                }
+                echo "Building ${env.BRANCH_NAME ?: 'local'} @ ${env.GIT_SHORT_SHA} -> ${env.IMAGE_REF}"
+            }
+        }
+
+        stage('Tooling') {
+            steps {
+                script {
+                    if (isUnix()) {
+                        sh 'java -version'
+                        sh 'docker version --format "docker {{.Server.Version}}"'
+                    } else {
+                        bat 'java -version'
+                    }
+                    mvn "${env.MVN_FLAGS} --version"
+                }
+            }
+        }
+
+        stage('Compile') {
+            steps {
+                script {
+                    mvn "${env.MVN_FLAGS} clean compile"
+                }
+            }
+        }
+
+        stage('Test') {
+            when {
+                expression { !params.SKIP_TESTS }
+            }
+            steps {
+                script {
+                    // JaCoCo is not declared in the pom, so the agent is attached and the
+                    // report rendered by invoking the plugin directly in one reactor run.
+                    if (params.RUN_COVERAGE) {
+                        mvn "${env.MVN_FLAGS} " +
+                            "org.jacoco:jacoco-maven-plugin:${env.JACOCO_VERSION}:prepare-agent " +
+                            "test " +
+                            "org.jacoco:jacoco-maven-plugin:${env.JACOCO_VERSION}:report"
+                    } else {
+                        mvn "${env.MVN_FLAGS} test"
+                    }
+                }
+            }
+            post {
+                always {
+                    junit(
+                        testResults: 'target/surefire-reports/*.xml',
+                        allowEmptyResults: true,
+                        skipPublishingChecks: true
+                    )
+                }
+            }
+        }
+
+        stage('Coverage Report') {
+            when {
+                allOf {
+                    expression { !params.SKIP_TESTS }
+                    expression { params.RUN_COVERAGE }
+                }
+            }
+            steps {
+                // Publishing coverage is informational: a missing plugin or report must
+                // not turn a green build red.
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    recordCoverage(
+                        tools: [[parser: 'JACOCO', pattern: 'target/site/jacoco/jacoco.xml']],
+                        sourceCodeRetention: 'MODIFIED'
+                    )
+                }
+                archiveArtifacts(
+                    artifacts: 'target/site/jacoco/**',
+                    allowEmptyArchive: true,
+                    onlyIfSuccessful: false
+                )
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            when {
+                expression { params.RUN_SONAR }
+            }
+            steps {
+                // `sonar.qualitygate.wait` makes the scanner poll SonarQube for the gate
+                // result and exit non-zero when it fails, so the build breaks here. This
+                // needs no inbound webhook from SonarQube back to Jenkins.
+                //
+                // If a SonarQube server is configured under Manage Jenkins > System, you
+                // can replace the withCredentials block with:
+                //     withSonarQubeEnv('sonar.fil.lab') { ... }   // drops -Dsonar.host.url/-Dsonar.token
+                withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
+                    script {
+                        def coverageArg = params.RUN_COVERAGE && !params.SKIP_TESTS
+                            ? '-Dsonar.coverage.jacocoReportPaths=target/site/jacoco/jacoco.xml'
+                            : ''
+                        mvn "${env.MVN_FLAGS} " +
+                            "org.sonarsource.scanner.maven:sonar-maven-plugin:${env.SONAR_PLUGIN_VERSION}:sonar " +
+                            "-Dsonar.host.url=${env.SONAR_HOST_URL} " +
+                            "-Dsonar.token=\$SONAR_TOKEN " +
+                            "-Dsonar.projectKey=${env.SONAR_PROJECT_KEY} " +
+                            "-Dsonar.projectName=${env.SONAR_PROJECT_NAME} " +
+                            "-Dsonar.projectVersion=${env.APP_VERSION} " +
+                            "-Dsonar.scm.revision=${env.GIT_SHORT_SHA} " +
+                            "-Dsonar.junit.reportPaths=target/surefire-reports " +
+                            "${coverageArg} " +
+                            "-Dsonar.qualitygate.wait=true " +
+                            "-Dsonar.qualitygate.timeout=600"
+                        // Branch/PR decoration is a Developer Edition feature. On Community
+                        // Build, passing -Dsonar.branch.name makes the scanner fail, so add
+                        // it only if this SonarQube is licensed for it:
+                        //     -Dsonar.branch.name=${env.BRANCH_NAME}
+                    }
+                }
+            }
+            post {
+                failure {
+                    echo "SonarQube quality gate failed or analysis errored. " +
+                         "Dashboard: ${env.SONAR_HOST_URL}/dashboard?id=${env.SONAR_PROJECT_KEY}"
+                }
+            }
+        }
+
+        stage('Package') {
+            steps {
+                script {
+                    // Tests already ran in their own stage; do not run them twice.
+                    mvn "${env.MVN_FLAGS} package -DskipTests"
+                }
+            }
+            post {
+                success {
+                    archiveArtifacts(
+                        artifacts: 'target/*.jar',
+                        excludes: 'target/*-sources.jar',
+                        fingerprint: true,
+                        onlyIfSuccessful: true
+                    )
+                }
+            }
+        }
+
+        stage('Dependency Vulnerability Scan') {
+            when {
+                expression { params.RUN_DEPENDENCY_CHECK }
+            }
+            steps {
+                // The NVD API key is read from the environment rather than the command
+                // line so it cannot leak via the process table or the build log.
+                withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
+                    script {
+                        if (isUnix()) {
+                            sh "mkdir -p ${env.DEPENDENCY_CHECK_DATA_DIR}"
+                        }
+                        mvn "${env.MVN_FLAGS} " +
+                            "org.owasp:dependency-check-maven:${env.DEPENDENCY_CHECK_VERSION}:check " +
+                            "-DnvdApiKeyEnvironmentVariable=NVD_API_KEY " +
+                            "-DdataDirectory=${env.DEPENDENCY_CHECK_DATA_DIR} " +
+                            "-DfailBuildOnCVSS=${params.DEPENDENCY_CHECK_FAIL_ON_CVSS} " +
+                            "-Dformats=HTML,XML,JSON " +
+                            "-DskipProvidedScope=true " +
+                            "-DskipTestScope=true"
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts(
+                        artifacts: 'target/dependency-check-report.*',
+                        allowEmptyArchive: true,
+                        onlyIfSuccessful: false
+                    )
+                    // Trend graphs via the OWASP Dependency-Check plugin, if installed.
+                    catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                        dependencyCheckPublisher(
+                            pattern: 'target/dependency-check-report.xml',
+                            failedTotalCritical: 0,
+                            unstableTotalHigh: 0
+                        )
+                    }
+                }
+                failure {
+                    echo 'Dependency-Check found vulnerabilities at or above the configured CVSS ' +
+                         'threshold. See the archived dependency-check-report.html.'
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                script {
+                    if (!isUnix()) {
+                        error 'Docker stages require a unix agent.'
+                    }
+                    // Note: `\\` so the shell receives a real line continuation. A single
+                    // backslash would be consumed by Groovy's triple-quoted string.
+                    sh """
+                        docker build \\
+                          --build-arg APP_VERSION=${env.APP_VERSION} \\
+                          --build-arg GIT_COMMIT=${env.GIT_SHORT_SHA} \\
+                          --build-arg BUILD_TIME=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \\
+                          -t ${env.IMAGE_REF} \\
+                          -t ${env.IMAGE_NAME}:latest \\
+                          .
+                    """
+                    sh "docker image inspect ${env.IMAGE_REF} --format 'image={{.Id}} size={{.Size}}'"
+                }
+            }
+        }
+
+        stage('Image Scan') {
+            when {
+                expression { params.RUN_IMAGE_SCAN }
+            }
+            steps {
+                script {
+                    // Trivy runs as a container against the agent's Docker socket. The
+                    // named volume caches the vulnerability database between builds.
+                    def trivy = "docker run --rm " +
+                                "-v /var/run/docker.sock:/var/run/docker.sock " +
+                                "-v trivy-cache:/root/.cache/ " +
+                                "-v \"\$WORKSPACE/target\":/out " +
+                                "${env.TRIVY_IMAGE} image --scanners vuln --no-progress"
+
+                    // Pass 1: full report of everything found, never breaks the build.
+                    sh "${trivy} --format json -o /out/trivy-report.json --exit-code 0 ${env.IMAGE_REF}"
+                    sh "${trivy} --format table -o /out/trivy-report.txt --exit-code 0 ${env.IMAGE_REF}"
+
+                    // Pass 2: the gate. Only fixable findings at the configured severities
+                    // break the build, so unpatched upstream CVEs cannot wedge the pipeline.
+                    sh "${trivy} --severity ${params.IMAGE_SCAN_SEVERITIES} --ignore-unfixed --exit-code 1 ${env.IMAGE_REF}"
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts(
+                        artifacts: 'target/trivy-report.*',
+                        allowEmptyArchive: true,
+                        onlyIfSuccessful: false
+                    )
+                }
+                failure {
+                    echo "Trivy found fixable ${params.IMAGE_SCAN_SEVERITIES} vulnerabilities in " +
+                         "${env.IMAGE_REF}. See the archived trivy-report.txt."
+                }
+            }
+        }
+
+        stage('Container Smoke Test') {
+            steps {
+                // Prove the image actually boots and serves traffic before it is promoted.
+                sh """
+                    set -e
+                    CONTAINER=week2-smoke-${env.BUILD_NUMBER}
+                    docker rm -f \$CONTAINER >/dev/null 2>&1 || true
+                    docker run -d --name \$CONTAINER -P ${env.IMAGE_REF} >/dev/null
+                    trap 'docker logs \$CONTAINER > target/container-smoke.log 2>&1 || true; docker rm -f \$CONTAINER >/dev/null 2>&1 || true' EXIT
+
+                    PORT=\$(docker port \$CONTAINER 8080/tcp | head -n 1 | sed 's/.*://')
+                    echo "Container listening on host port \$PORT"
+
+                    for i in \$(seq 1 30); do
+                        if docker logs \$CONTAINER 2>&1 | grep -q 'Started Week2Application'; then
+                            echo 'Application started.'
+                            break
+                        fi
+                        if [ "\$(docker inspect -f '{{.State.Running}}' \$CONTAINER)" != "true" ]; then
+                            echo 'Container exited before starting:'
+                            docker logs \$CONTAINER
+                            exit 1
+                        fi
+                        sleep 2
+                        if [ \$i -eq 30 ]; then
+                            echo 'Application did not start within 60s:'
+                            docker logs \$CONTAINER
+                            exit 1
+                        fi
+                    done
+
+                    # This project has no actuator dependency, so probe a real endpoint.
+                    STATUS=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 http://localhost:\$PORT/customers)
+                    echo "GET /customers -> \$STATUS"
+                    if [ "\$STATUS" != "200" ]; then
+                        docker logs \$CONTAINER
+                        exit 1
+                    fi
+                """
+            }
+            post {
+                always {
+                    archiveArtifacts(
+                        artifacts: 'target/container-smoke.log',
+                        allowEmptyArchive: true,
+                        onlyIfSuccessful: false
+                    )
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "CI passed for ${env.GIT_SHORT_SHA} - image ${env.IMAGE_REF} (build #${env.BUILD_NUMBER})."
+        }
+        unstable {
+            echo 'CI finished with test failures or an unstable stage.'
+        }
+        failure {
+            echo "CI failed for ${env.GIT_SHORT_SHA} - see ${env.BUILD_URL}console"
+        }
+        always {
+            script {
+                // Do not leave build images behind on the agent; keep the :latest tag.
+                if (isUnix()) {
+                    sh "docker rm -f week2-smoke-${env.BUILD_NUMBER} >/dev/null 2>&1 || true"
+                    sh "docker rmi ${env.IMAGE_REF} >/dev/null 2>&1 || true"
+                }
+            }
+            // Keep the cached local Maven repository, discard everything else.
+            cleanWs(
+                deleteDirs: true,
+                notFailBuild: true,
+                patterns: [[pattern: '.m2/**', type: 'EXCLUDE']]
+            )
+        }
+    }
+}
