@@ -90,6 +90,8 @@ pipeline {
         // Dependency-Check keeps a local mirror of the NVD. It lives outside the
         // workspace so `cleanWs` does not force a multi-hour re-download every build.
         DEPENDENCY_CHECK_DATA_DIR = '/var/lib/jenkins/caches/dependency-check'
+        // Optional. Missing or blank means the scan runs unauthenticated (slow).
+        NVD_CREDENTIALS_ID        = 'nvd-api-key'
 
         IMAGE_NAME = 'week2'
         // Set to e.g. 'registry.fil.lab/platform' to namespace the image for a future push.
@@ -266,22 +268,63 @@ pipeline {
             when {
                 expression { params.RUN_DEPENDENCY_CHECK }
             }
+            options {
+                // Bounded separately from the pipeline timeout: an unauthenticated NVD
+                // download can run for an hour, and it should not consume the budget the
+                // later Docker and scan stages need.
+                timeout(time: 40, unit: 'MINUTES')
+            }
             steps {
-                // The NVD API key is read from the environment rather than the command
-                // line so it cannot leak via the process table or the build log.
-                withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
-                    script {
-                        if (isUnix()) {
-                            sh "mkdir -p ${env.DEPENDENCY_CHECK_DATA_DIR}"
+                script {
+                    if (isUnix()) {
+                        sh "mkdir -p ${env.DEPENDENCY_CHECK_DATA_DIR}"
+                    }
+
+                    def baseArgs = "${env.MVN_FLAGS} " +
+                        "org.owasp:dependency-check-maven:${env.DEPENDENCY_CHECK_VERSION}:check " +
+                        "-DdataDirectory=${env.DEPENDENCY_CHECK_DATA_DIR} " +
+                        "-DfailBuildOnCVSS=${params.DEPENDENCY_CHECK_FAIL_ON_CVSS} " +
+                        "-Dformats=HTML,XML,JSON " +
+                        "-DskipProvidedScope=true " +
+                        "-DskipTestScope=true"
+
+                    // The NVD API key is optional. Probe for the credential instead of
+                    // letting withCredentials abort the build when it is not configured:
+                    // a missing key should slow the scan down, not break the pipeline.
+                    def hasNvdKey = false
+                    if (env.NVD_CREDENTIALS_ID) {
+                        try {
+                            withCredentials([string(credentialsId: env.NVD_CREDENTIALS_ID,
+                                                    variable: 'NVD_API_KEY_PROBE')]) {
+                                hasNvdKey = true
+                            }
+                        } catch (ignored) {
+                            hasNvdKey = false
                         }
-                        mvn "${env.MVN_FLAGS} " +
-                            "org.owasp:dependency-check-maven:${env.DEPENDENCY_CHECK_VERSION}:check " +
-                            "-DnvdApiKeyEnvironmentVariable=NVD_API_KEY " +
-                            "-DdataDirectory=${env.DEPENDENCY_CHECK_DATA_DIR} " +
-                            "-DfailBuildOnCVSS=${params.DEPENDENCY_CHECK_FAIL_ON_CVSS} " +
-                            "-Dformats=HTML,XML,JSON " +
-                            "-DskipProvidedScope=true " +
-                            "-DskipTestScope=true"
+                    }
+
+                    if (hasNvdKey) {
+                        // Passed by environment variable name, not -D, so the key cannot
+                        // leak via the process table or the build log.
+                        withCredentials([string(credentialsId: env.NVD_CREDENTIALS_ID,
+                                                variable: 'NVD_API_KEY')]) {
+                            mvn "${baseArgs} -DnvdApiKeyEnvironmentVariable=NVD_API_KEY"
+                        }
+                    } else {
+                        def wantedId = env.NVD_CREDENTIALS_ID ?: 'nvd-api-key'
+                        echo "WARNING: no NVD API key credential found (looked for id " +
+                             "'${wantedId}').\n" +
+                             "Dependency-Check will fall back to unauthenticated NVD access, which " +
+                             "is heavily rate limited: the first database build can take well over " +
+                             "an hour and often fails outright.\n" +
+                             "To fix, request a free key at " +
+                             "https://nvd.nist.gov/developers/request-an-api-key and add it to " +
+                             "Jenkins as a 'Secret text' credential with ID '${wantedId}'.\n" +
+                             "To skip this stage instead, re-run with RUN_DEPENDENCY_CHECK unchecked."
+
+                        // A longer inter-request delay is what keeps the unauthenticated NVD
+                        // API from returning 403/429 partway through the download.
+                        mvn "${baseArgs} -DnvdApiDelay=8000"
                     }
                 }
             }
@@ -302,8 +345,14 @@ pipeline {
                     }
                 }
                 failure {
-                    echo 'Dependency-Check found vulnerabilities at or above the configured CVSS ' +
-                         'threshold. See the archived dependency-check-report.html.'
+                    // The previous wording asserted a cause this stage never checked.
+                    // Findings and infrastructure errors both land here.
+                    echo "Dependency-Check stage failed. Two distinct causes look alike here:\n" +
+                         "  1. Findings at or above CVSS ${params.DEPENDENCY_CHECK_FAIL_ON_CVSS} - " +
+                         "the archived dependency-check-report.html lists them.\n" +
+                         "  2. The scan never ran (no NVD data, rate-limited download, or " +
+                         "${env.DEPENDENCY_CHECK_DATA_DIR} not writable) - no report is archived.\n" +
+                         "Check whether a report was archived before treating this as a security finding."
                 }
             }
         }
