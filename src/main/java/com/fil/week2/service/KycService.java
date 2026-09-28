@@ -1,5 +1,6 @@
 package com.fil.week2.service;
 
+import com.fil.week2.aop.Traced;
 import com.fil.week2.dto.*;
 import com.fil.week2.exception.CustomerNotFoundException;
 import com.fil.week2.exception.KycNotFoundException;
@@ -20,6 +21,7 @@ public class KycService {
         this.customerRepository = customerRepository;
     }
 
+    @Traced(logArgs = true,value = "kyc.submitted")
     @Transactional
     public KycSubmissionResponse submit(Long customerId, KycSubmissionRequest request) {
         Customer customer = requireCustomer(customerId);

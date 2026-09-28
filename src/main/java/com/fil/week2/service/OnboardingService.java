@@ -1,13 +1,17 @@
 package com.fil.week2.service;
 
+import com.fil.week2.aop.Traced;
 import com.fil.week2.model.Customer;
 import com.fil.week2.repository.CustomerRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.ExecutorService;
 
 @Service
 public class OnboardingService {
+    private static Logger log = LoggerFactory.getLogger(OnboardingService.class);
     private final NotificationSender notificationSender;
     private final ExecutorService executor;
     private final CustomerRepository customerRepository;
@@ -24,6 +28,7 @@ public class OnboardingService {
      * Onboarding does not verify anyone: a new customer is in good standing and
      * unverified, and those are two separate facts.
      */
+    @Traced(logArgs = true, value = "onboarded.customer")
     public Customer onboard(Customer customer) {
         Customer saved = customerRepository.save(customer);
 
