@@ -22,7 +22,7 @@ public class OnboardingHealthIndicator implements HealthIndicator {
         long total = customerRepository.count();
         double failedRate = onboardingMetrics.failedRate();
         System.out.println("failedRate: "+failedRate);
-        Health.Builder builder = failedRate > 0.5 ? Health.up():  Health.down();
+        Health.Builder builder = failedRate > 0.5 ? Health.down():  Health.up();
         return builder.withDetail("customers",total)
                 .withDetail("failedRatio", failedRate)
                 .build();

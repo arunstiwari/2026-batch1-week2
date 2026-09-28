@@ -1,5 +1,7 @@
 package com.fil.week2.exception;
 
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -11,19 +13,37 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    private final Tracer tracer;
+
+    public GlobalExceptionHandler(Tracer tracer) {
+        this.tracer = tracer;
+    }
+
+    private String currentTraceId() {
+        Span currentSpan = tracer.currentSpan();
+        return currentSpan != null ? currentSpan.context().traceId():  null;
+    }
+
+
 
     @ExceptionHandler({CustomerNotFoundException.class,
             KycNotFoundException.class,
             AccountNotFoundException.class})
     ProblemDetail notFound(RuntimeException exception) {
-        return problem(HttpStatus.NOT_FOUND, "Not found", exception.getMessage());
+        ProblemDetail problemDetail = problem(HttpStatus.NOT_FOUND, "Not found", exception.getMessage());
+        return stamp(problemDetail);
+    }
+
+    private ProblemDetail stamp(ProblemDetail problemDetail) {
+        problemDetail.setProperty("traceId", currentTraceId());
+        return problemDetail;
     }
 
     @ExceptionHandler({InvalidStateTransitionException.class,
             AccountOpeningNotPermittedException.class,
             WithdrawalNotPermittedException.class})
     ProblemDetail notAllowed(RuntimeException exception) {
-        return problem(HttpStatus.CONFLICT, "Not allowed in the current state", exception.getMessage());
+        return stamp(problem(HttpStatus.CONFLICT, "Not allowed in the current state", exception.getMessage()));
     }
 
     /** The balance is deliberately left out of the response. */
