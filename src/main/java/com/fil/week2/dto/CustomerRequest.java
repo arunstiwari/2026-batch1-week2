@@ -2,6 +2,7 @@ package com.fil.week2.dto;
 
 import com.fil.week2.model.Address;
 import com.fil.week2.model.Customer;
+import com.fil.week2.validator.UniqueEmail;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 
@@ -12,7 +13,10 @@ import java.util.Set;
  * standing is the domain's to decide.
  */
 public record CustomerRequest(@NotBlank String name,
-                              @NotBlank @Email String email,
+                              @NotBlank
+                              @Email
+                              @UniqueEmail
+                              String email,
                               Address address,
                               Address billingAddress,
                               Set<String> tags) {
